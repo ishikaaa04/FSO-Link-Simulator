@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FSO Link Simulator (Data Gen)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /*
+          This CSS block sets up the visual style for the simulator,
+          including the buildings, laser, info panels, and all
+          visual effects like fog and rain.
+        */
+        body {
+            font-family: 'Inter', sans-serif;
+            /* Prevents highlighting text when dragging */
+            user-select: none;
+        }
+
+        #receiver {
+            position: absolute;
+            top: 50%;
+            right: 8rem;
+            transform: translateY(-50%);
+            cursor: grab;
+            /* Ensures touch actions (like scrolling) don't interfere with dragging */
+            touch-action: none; 
+        }
+
+        #receiver:active {
+            cursor: grabbing;
+        }
+
+        #transmitter {
+            position: absolute;
+            top: 50%;
+            left: 8rem;
+            transform: translateY(-50%);
+        }
+
+        #laser-line {
+            position: absolute;
+            height: 3px;
+            /* Sets the rotation point to the start of the line (the transmitter) */
+            transform-origin: 0% 50%;
+            pointer-events: none;
+            z-index: 5;
+            transition: background-color 0.3s ease;
+        }
+
+        #laser-line.stable {
+            background-color: rgba(74, 222, 128, 0.75); /* Green */
+        }
+
+        #laser-line.failed {
+            background-color: rgba(239, 68, 68, 0.75); /* Red */
+        }
+
+        /* Adds a blue ring around the active button */
+        .weather-button.active {
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.5);
+        }
+
+        /* Fixes the panels to the screen */
+        #info-panel,
+        #controls-panel {
+            position: fixed;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100;
+        }
+
+        #info-panel {
+            top: 1rem;
+        }
+
+        #controls-panel {
+            bottom: 1rem;
+            width: 90vw;
+            max-width: 800px; /* Wider to fit all 3 columns */
+        }
+
+        /* --- Visual Effects CSS --- */
+        #fog-overlay {
+            position: fixed;
+            inset: 0;
+            background-color: rgb(255, 255, 255); /* Solid white fog */
+            z-index: 0;
+            pointer-events: none;
+            transition: opacity 0.75s ease-in-out;
+            opacity: 0; /* Starts invisible */
+        }
+
+        #rain-container {
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            pointer-events: none;
+            overflow: hidden;
+        }
+
+        .raindrop {
+            position: absolute;
+            width: 2px;
+            height: 15px;
+            background: linear-gradient(to bottom, rgba(156, 163, 175, 0.1), rgba(59, 130, 246, 0.6));
+            animation: fall 0.7s linear infinite;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        /* Raindrop falling animation */
+        @keyframes fall {
+            0% {
+                transform: translateY(-50px);
+                opacity: 0;
+            }
+            10% {
+                opacity: 1;
+            }
+            90% {
+                opacity: 1;
+            }
+            100% {
+                transform: translateY(100vh);
+                opacity: 0;
+            }
+        }
+        
+        /* --- Custom Slider Styling --- */
+        input[type="range"] {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 8px;
+            background: #d3d3d3;
+            outline: none;
+            opacity: 0.7;
+            transition: opacity .2s;
+            border-radius: 4px;
+        }
+        input[type="range"]:hover {
+            opacity: 1;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #3B82F6; /* Blue handle */
+            cursor: pointer;
+            border-radius: 50%;
+        }
+        input[type="range"]::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            background: #3B82F6;
+            cursor: pointer;
+            border-radius: 50%;
+        }
+    </style>
+</head>
+
+<body class="bg-blue-100 min-h-screen relative overflow-hidden pb-64"> <!-- Added padding-bottom to prevent controls from hiding buildings -->
+
+    <!-- Top Info Panel (Displays all outputs) -->
+    <div id="info-panel" class="bg-white/80 backdrop-blur-sm shadow-xl rounded-lg p-4 text-center min-w-[300px]">
+        <h2 class="text-lg font-bold text-gray-800">Link Status</h2>
+        <div class="grid grid-cols-2 gap-x-4 gap-y-1 mt-2 text-left">
+            <span class="text-sm text-gray-600">Weather:</span>
+            <span id="weather-status" class="text-sm font-bold text-gray-800">Clear</span>
+
+            <span class="text-sm text-gray-600">Distance:</span>
+            <span class="whitespace-nowrap">
+                <span id="km-distance" class="font-mono font-bold text-blue-800">0.00</span> km
+            </span>
+
+            <span class="text-base text-gray-700 font-semibold">Link Margin:</span>
+            <span class="whitespace-nowrap">
+                <span id="link-margin" class="font-mono font-bold text-xl text-gray-800">0.00</span> dB
+            </span>
+
+            <span class="text-base text-gray-700 font-semibold">Link Status:</span>
+            <span id="link-status" class="font-bold text-xl text-gray-800">--</span>
+
+            <!-- Label for the prediction model -->
+            <span class="text-sm text-gray-600 border-t pt-1 mt-1">Prediction Model:</span>
+            <span class="text-sm font-bold text-gray-800 border-t pt-1 mt-1">NRBO-BP (Sim)</span>
+        </div>
+    </div>
+
+    <!-- Visual Elements (Laser, Fog, Rain) -->
+    <div id="laser-line" class="failed"></div>
+    <div id="fog-overlay"></div>
+    <div id="rain-container"></div>
+
+
+    <!-- Transmitter Building -->
+    <div id="transmitter" class="
+        relative z-10 bg-gray-700 w-32 h-64 rounded-t-lg shadow-lg
+        flex flex-col justify-between items-center p-2 border-b-4 border-gray-900
+    ">
+        <div class="w-2 h-8 bg-gray-400 rounded-t-full"></div> <!-- Antenna -->
+        <div class="grid grid-cols-2 gap-2 w-full px-2">
+            <!-- Windows -->
+            <div class="w-12 h-10 bg-sky-300 rounded-sm shadow-inner"></div>
+            <div class="w-12 h-10 bg-sky-300 rounded-sm shadow-inner"></div>
+            <div class="w-12 h-10 bg-sky-300 rounded-sm shadow-inner"></div>
+            <div class="w-12 h-10 bg-sky-300 rounded-sm shadow-inner"></div>
+        </div>
+        <div class="bg-gray-900 text-white text-xs px-2 py-1 rounded">Transmitter</div>
+    </div>
+
+    <!-- Receiver Building (Draggable) -->
+    <div id="receiver" class="
+        z-20 bg-gray-700 w-32 h-64 rounded-t-lg shadow-lg
+        flex flex-col justify-between items-center p-2 border-b-4 border-gray-900
+    ">
+        <div class="w-2 h-8 bg-gray-400 rounded-t-full"></div> <!-- Antenna -->
+        <div class="grid grid-cols-2 gap-2 w-full px-2">
+            <!-- Windows -->
+            <div class="w-12 h-10 bg-sky-300 rounded-sm shadow-inner"></div>
+            <div class="w-12 h-10 bg-sky-300 rounded-sm shadow-inner"></div>
+            <div class="w-12 h-10 bg-sky-300 rounded-sm shadow-inner"></div>
+            <div class="w-12 h-10 bg-sky-300 rounded-sm shadow-inner"></div>
+        </div>
+        <div class="bg-gray-900 text-white text-xs px-2 py-1 ruounded">Receiver</div>
+    </div>
+
+    <!-- Bottom Controls Panel (3 Columns) -->
+    <div id="controls-panel" class="bg-white/80 backdrop-blur-sm shadow-xl rounded-lg p-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+        
+        <!-- Column 1: Atmospheric Conditions -->
+        <div class="md:col-span-1">
+            <h3 class="text-center text-sm font-semibold text-gray-800 mb-2">Atmospheric Conditions</h3>
+            <div class="flex flex-col flex-wrap gap-2">
+                <button
+                    class="weather-button bg-sky-500 text-white px-3 py-1 rounded-lg shadow hover:bg-sky-600 transition-colors"
+                    data-weather="Clear">
+                    Clear
+                </button>
+                <button
+                    class="weather-button bg-blue-600 text-white px-3 py-1 rounded-lg shadow hover:bg-blue-700 transition-colors"
+                    data-weather="Light Rain">
+                    Light Rain
+                </button>
+                 <button
+                    class="weather-button bg-blue-800 text-white px-3 py-1 rounded-lg shadow hover:bg-blue-900 transition-colors"
+                    data-weather="Heavy Rain">
+                    Heavy Rain
+                </button>
+                <button
+                    class="weather-button bg-gray-400 text-white px-3 py-1 rounded-lg shadow hover:bg-gray-500 transition-colors"
+                    data-weather="Light Fog">
+                    Light Fog
+                </button>
+                <button
+                    class="weather-button bg-gray-600 text-white px-3 py-1 rounded-lg shadow hover:bg-gray-700 transition-colors"
+                    data-weather="Heavy Fog">
+                    Heavy Fog
+                </button>
+            </div>
+        </div>
+
+        <!-- Column 2: Link Parameters -->
+        <div class="md:col-span-1 border-t md:border-t-0 md:border-l pl-4">
+            <h3 class="text-center text-sm font-semibold text-gray-800 mb-2">Link Parameters</h3>
+            <!-- Wavelength -->
+            <div class="mb-3">
+                <label class="block text-xs font-medium text-gray-700 text-center">Wavelength</label>
+                <div class="flex justify-center gap-2 mt-1">
+                    <input type="radio" id="wl-850" name="wavelength" value="850" class="link-param-control" checked>
+                    <label for="wl-850" class="text-sm">850 nm</label>
+                    <input type="radio" id="wl-1550" name="wavelength" value="1550" class="link-param-control">
+                    <label for="wl-1550" class="text-sm">1550 nm</label>
+                </div>
+            </div>
+             <!-- Transmit Power -->
+             <div class="mb-2">
+                <label for="tx-power" class="block text-xs font-medium text-gray-700">
+                    Transmission Power: <span id="tx-power-val" class="font-bold">15</span> mW
+                </label>
+                <input type="range" id="tx-power" min="5" max="25" value="15" class="link-param-control w-full">
+            </div>
+             <!-- Beam Divergence -->
+             <div class="mb-2">
+                <label for="beam-divergence" class="block text-xs font-medium text-gray-700">
+                    Beam Divergence: <span id="beam-div-val" class="font-bold">3.0</span> mrad
+                </label>
+                <input type="range" id="beam-divergence" min="2" max="5" value="3" step="0.1" class="link-param-control w-full">
+            </div>
+            <!-- Receiver Aperture (Fixed) -->
+            <div class="text-center mt-3">
+                 <label class="block text-xs font-medium text-gray-700">
+                    Receiver Aperture (Fixed): <span class="font-bold">10 cm</span>
+                 </label>
+            </div>
+        </div>
+
+        <!-- Column 3: Data Generation Engine -->
+        <div class="md:col-span-1 border-t md:border-t-0 md:border-l pl-4">
+            <h3 class="text-center text-sm font-semibold text-gray-800 mb-2">Data Generation Engine</h3>
+            <div class="flex flex-col gap-2">
+                <label for="num-points" class="block text-xs font-medium text-gray-700">Number of Data Points:</label>
+                <input type="number" id="num-points" value="1000" class="w-full p-1 border border-gray-300 rounded-md text-sm">
+                
+                <button id="generate-data-btn" class="bg-green-600 text-white px-3 py-2 rounded-lg shadow hover:bg-green-700 transition-colors">
+                    Generate Data
+                </button>
+                
+                <button id="download-csv-btn" class="bg-blue-600 text-white px-3 py-2 rounded-lg shadow hover:bg-blue-700 transition-colors hidden" disabled>
+                    Download fso_dataset.csv
+                </button>
+
+                <div id="gen-status" class="text-xs text-center text-gray-600 h-4"></div>
+            </div>
+        </div>
+    </div>
+
+
+    <script>
+        // --- Wavelength-dependent Attenuation Table (dB/km) ---
+        // This object holds the "physics" for our weather simulation
+        // Note how 850nm is penalized more heavily by fog.
+        const ATTENUATION_RATES = {
+            "Clear": {
+                850: 0.3,
+                1550: 0.2
+            },
+            "Light Rain": {
+                850: 2.0,
+                1550: 3.0
+            },
+            "Heavy Rain": {
+                850: 6.0,
+                1550: 8.0
+            },
+            "Light Fog": {
+                850: 20.0,
+                1550: 12.0
+            },
+            "Heavy Fog": {
+                850: 70.0,
+                1550: 50.0
+            }
+        };
+
+
+        /**
+         * Prediction engine (Physics-Based "Ground Truth" Model)
+         * This function is the "brain" of the simulator. It calculates
+         * the final link margin based on all input parameters.
+         *
+         * @param {number} distance_km - Link distance
+         * @param {number} attenuation_db_per_km - Weather loss factor
+         * @param {number} tx_power_mw - Transmitter power in milliwatts
+         * @param {number} beam_divergence_mrad - Beam spread in milliradians
+         * @returns {number} The final link margin in dB.
+         */
+        function calculateLinkMargin(distance_km, attenuation_db_per_km, tx_power_mw, beam_divergence_mrad) {
+            
+            // --- 1. System Gain (Your Starting Budget) ---
+            // Convert transmitter power from mW to dBm
+            const txPower_dBm = 10 * Math.log10(tx_power_mw);
+            // Set a fixed receiver sensitivity (e.g., -35 dBm for 1 Gbps)
+            const RECEIVER_SENSITIVITY_DBM = -35; 
+            // System Gain is the total loss the link can handle
+            const systemGain_db = txPower_dBm - RECEIVER_SENSITIVITY_DBM;
+
+            // Handle edge case: if distance is zero, return max margin
+            if (distance_km <= 0.01) {
+                return systemGain_db;
+            }
+
+            // --- 2. Calculate Total Losses ---
+            // A. Atmospheric Attenuation (Weather loss)
+            const atmosphericLoss_db = distance_km * attenuation_db_per_km;
+            
+            // B. Geometric Spreading Loss
+            const RECEIVER_APERTURE_M = 0.1; // 10cm fixed aperture
+            // Calculate how large the beam is at the receiver
+            // (div * dist) = beam diameter in meters
+            const geometricLoss_raw = (beam_divergence_mrad * distance_km) / RECEIVER_APERTURE_M;
+            // Loss is 0 if beam is smaller than aperture, otherwise use formula
+            const geometricLoss_db = (geometricLoss_raw <= 1) ? 0 : (20 * Math.log10(geometricLoss_raw));
+
+            // C. Total Loss
+            const totalLoss_db = atmosphericLoss_db + geometricLoss_db;
+            
+            // --- 3. Calculate Final Link Margin ---
+            const linkMargin_db = systemGain_db - totalLoss_db;
+
+            // Return rounded to 2 decimal places
+            return Math.round(linkMargin_db * 100) / 100;
+        }
+
+        // --- Main Application Logic ---
+        document.addEventListener('DOMContentLoaded', () => {
+
+            // --- A. Get Element References ---
+            const transmitter = document.getElementById('transmitter');
+            const receiver = document.getElementById('receiver');
+            const laserLine = document.getElementById('laser-line');
+            
+            // Info Panel elements
+            const kmDistSpan = document.getElementById('km-distance');
+            const weatherStatusSpan = document.getElementById('weather-status');
+            const linkMarginSpan = document.getElementById('link-margin');
+            const linkStatusSpan = document.getElementById('link-status');
+            
+            // Visual Effect elements
+            const weatherButtons = document.querySelectorAll('.weather-button');
+            const fogOverlay = document.getElementById('fog-overlay');
+            const rainContainer = document.getElementById('rain-container');
+
+            // Parameter Control elements
+            const paramControls = document.querySelectorAll('.link-param-control');
+            const txPowerSlider = document.getElementById('tx-power');
+            const txPowerValSpan = document.getElementById('tx-power-val');
+            const beamDivSlider = document.getElementById('beam-divergence');
+            const beamDivValSpan = document.getElementById('beam-div-val');
+
+            // Data Generation elements
+            const numPointsInput = document.getElementById('num-points');
+            const genDataBtn = document.getElementById('generate-data-btn');
+            const downloadBtn = document.getElementById('download-csv-btn');
+            const genStatus = document.getElementById('gen-status');
+            let generatedCSVData = ""; // Stores the generated CSV string
+
+
+            // --- B. Simulation State ---
+            // These variables hold the current state of all inputs.
+            let currentWavelength = 850; 
+            let currentAttenuationFactor = ATTENUATION_RATES["Clear"][currentWavelength];
+            let currentWeather = 'Clear';
+            let currentKmDistance = 0;
+            let currentTxPower_mW = 15;
+            let currentBeamDivergence_mrad = 3.0;
+
+            // --- C. Draggable Logic ---
+            let isDragging = false;
+            let offsetX = 0;
+            let offsetY = 0;
+
+            const startDrag = (e) => {
+                isDragging = true;
+                receiver.style.cursor = 'grabbing';
+                document.body.style.cursor = 'grabbing';
+                
+                // Use touch or mouse coordinates
+                const clientX = e.clientX ?? e.touches[0].clientX;
+                const clientY = e.clientY ?? e.touches[0].clientY;
+                
+                const rect = receiver.getBoundingClientRect();
+                offsetX = clientX - rect.left;
+                offsetY = clientY - rect.top;
+                
+                // Add listeners to the whole document for smooth dragging
+                document.addEventListener('mousemove', onDrag);
+                document.addEventListener('mouseup', stopDrag);
+                document.addEventListener('touchmove', onDrag);
+                document.addEventListener('touchend', stopDrag);
+            };
+
+            const onDrag = (e) => {
+                if (!isDragging) return;
+                e.preventDefault(); // Prevent scrolling on touch devices
+                
+                const clientX = e.clientX ?? e.touches[0].clientX;
+                const clientY = e.clientY ?? e.touches[0].clientY;
+                
+                let newX = clientX - offsetX;
+                let newY = clientY - offsetY;
+                
+                // Constrain dragging within the window
+                const rect = receiver.getBoundingClientRect();
+                newX = Math.max(0, Math.min(newX, window.innerWidth - rect.width));
+                newY = Math.max(0, Math.min(newY, window.innerHeight - rect.height));
+
+                receiver.style.left = `${newX}px`;
+                receiver.style.top = `${newY}px`;
+                receiver.style.transform = ''; // Clear initial transform
+                
+                // This is the most important part:
+                // Re-run the simulation on every mouse movement!
+                updateLink();
+            };
+
+            const stopDrag = () => {
+                if (!isDragging) return;
+                isDragging = false;
+                receiver.style.cursor = 'grab';
+                document.body.style.cursor = 'default';
+                
+                // Clean up event listeners
+                document.removeEventListener('mousemove', onDrag);
+                document.removeEventListener('mouseup', stopDrag);
+                document.removeEventListener('touchmove', onDrag);
+                document.removeEventListener('touchend', stopDrag);
+            };
+
+            // Attach the "start" listeners to the receiver building
+            receiver.addEventListener('mousedown', startDrag);
+            receiver.addEventListener('touchstart', startDrag);
+
+            // --- D. Weather Button Logic ---
+            weatherButtons.forEach(button => {
+                button.addEventListener('click', () => {
+                    // 1. Update state
+                    currentWeather = button.dataset.weather;
+                    currentAttenuationFactor = ATTENUATION_RATES[currentWeather][currentWavelength];
+
+                    // 2. Update Visual Effects
+                    switch (currentWeather) {
+                        case 'Clear': setFogOpacity(0); createRain(0); break;
+                        case 'Light Rain':
+                        case 'Heavy Rain':
+                            setFogOpacity(0);
+                            createRain(currentWeather === 'Light Rain' ? 100 : 250);
+                            break;
+                        case 'Light Fog': setFogOpacity(0.5); createRain(0); break;
+                        case 'Heavy Fog': setFogOpacity(0.85); createRain(0); break;
+                        default: setFogOpacity(0); createRain(0);
+                    }
+                    
+                    // 3. Update button UI
+                    weatherButtons.forEach(btn => btn.classList.remove('active'));
+                    button.classList.add('active');
+                    
+                    // 4. Re-run simulation
+                    updateLink();
+                });
+            });
+
+            // --- E. Parameter Control Logic ---
+            // Add listeners to all other controls
+            
+            txPowerSlider.addEventListener('input', (e) => {
+                currentTxPower_mW = parseFloat(e.target.value);
+                txPowerValSpan.innerText = currentTxPower_mW;
+                updateLink();
+            });
+
+            beamDivSlider.addEventListener('input', (e) => {
+                currentBeamDivergence_mrad = parseFloat(e.target.value);
+                beamDivValSpan.innerText = currentBeamDivergence_mrad.toFixed(1);
+                updateLink();
+            });
+
+            document.querySelectorAll('input[name="wavelength"]').forEach(radio => {
+                radio.addEventListener('change', (e) => {
+                    currentWavelength = parseInt(e.target.value);
+                    // Crucially, update the attenuation factor from the table
+                    currentAttenuationFactor = ATTENUATION_RATES[currentWeather][currentWavelength];
+                    updateLink();
+                });
+            });
+
+
+            // --- F. Main "Update" Function (The Core) ---
+            // This function is called whenever *any* input changes
+            function updateLink() {
+                // 1. Get positions and calculate distance
+                const txRect = transmitter.getBoundingClientRect();
+                const rxRect = receiver.getBoundingClientRect();
+                
+                // Calculate centers of buildings
+                const txCenterX = txRect.left + txRect.width / 2;
+                const txCenterY = txRect.top + txRect.height / 2;
+                const rxCenterX = rxRect.left + rxRect.width / 2;
+                const rxCenterY = rxRect.top + rxRect.height / 2;
+
+                // Calculate distance and angle
+                const deltaX = rxCenterX - txCenterX;
+                const deltaY = rxCenterY - txCenterY;
+                const pixelDist = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+                currentKmDistance = pixelDist / 200.0; // 100px = 0.5km = 200.0 px/km
+
+                // 2. Run the simulation
+                const margin = calculateLinkMargin(
+                    currentKmDistance, 
+                    currentAttenuationFactor,
+                    currentTxPower_mW,
+                    currentBeamDivergence_mrad
+                );
+                const isStable = margin > 0;
+
+                // 3. Update Info Panel
+                kmDistSpan.innerText = currentKmDistance.toFixed(2);
+                weatherStatusSpan.innerText = `${currentWeather} (${currentWavelength}nm)`;
+                linkMarginSpan.innerText = margin.toFixed(2);
+                linkStatusSpan.innerText = isStable ? 'Stable' : 'Failed';
+                
+                // 4. Update UI Colors
+                linkStatusSpan.className = isStable ? 'font-bold text-xl text-green-600' : 'font-bold text-xl text-red-600';
+                linkMarginSpan.className = isStable ? 'font-mono font-bold text-xl text-green-700' : 'font-mono font-bold text-xl text-red-700';
+                laserLine.classList.toggle('stable', isStable);
+                laserLine.classList.toggle('failed', !isStable);
+
+                // 5. Update Laser Line position and rotation
+                const angle = Math.atan2(deltaY, deltaX) * (180 / Math.PI);
+                laserLine.style.left = `${txCenterX}px`;
+                laserLine.style.top = `${txCenterY}px`;
+                laserLine.style.width = `${pixelDist}px`;
+                laserLine.style.transform = `rotate(${angle}deg)`;
+            }
+
+            // --- G. Visual Effect Helper Functions ---
+            function setFogOpacity(opacity) {
+                fogOverlay.style.opacity = opacity;
+            }
+
+            function createRain(density) {
+                rainContainer.innerHTML = ''; // Clear old rain
+                if (density === 0) return;
+                for (let i = 0; i < density; i++) {
+                    const drop = document.createElement('div');
+                    drop.className = 'raindrop';
+                    drop.style.left = `${Math.random() * 100}vw`;
+                    drop.style.animationDelay = `${Math.random() * 2}s`;
+                    drop.style.animationDuration = `${0.5 + Math.random() * 0.5}s`;
+                    rainContainer.appendChild(drop);
+                }
+            }
+
+            // --- H. NEW: Data Generation Logic ---
+            
+            /**
+             * Returns a random float between min and max
+             */
+            function getRandom(min, max) {
+                return Math.random() * (max - min) + min;
+            }
+
+            genDataBtn.addEventListener('click', () => {
+                const numPoints = parseInt(numPointsInput.value);
+                if (isNaN(numPoints) || numPoints <= 0) {
+                    genStatus.innerText = "Please enter a valid number.";
+                    return;
+                }
+
+                genStatus.innerText = `Generating ${numPoints} data points...`;
+                genDataBtn.disabled = true;
+                downloadBtn.disabled = true;
+                downloadBtn.classList.add('hidden');
+
+                // Run generation asynchronously to avoid freezing the browser
+                // The 50ms timeout allows the UI to update *before* the loop starts
+                setTimeout(() => {
+                    const data = [];
+                    // CSV Header
+                    data.push("distance_km,wavelength_nm,tx_power_mw,beam_div_mrad,attenuation_db_km,link_margin_db");
+
+                    const weatherTypes = Object.keys(ATTENUATION_RATES);
+
+                    for (let i = 0; i < numPoints; i++) {
+                        // 1. Randomize all parameters
+                        const randDist = getRandom(0.1, 5.0); // 0.1km to 5km
+                        const randWavelength = Math.random() > 0.5 ? 1550 : 850;
+                        const randTxPower = getRandom(5, 25);
+                        const randBeamDiv = getRandom(2, 5);
+                        const randWeather = weatherTypes[Math.floor(Math.random() * weatherTypes.length)];
+                        const randAttenuation = ATTENUATION_RATES[randWeather][randWavelength];
+                        
+                        // 2. Run simulation to get the "ground truth"
+                        const margin = calculateLinkMargin(randDist, randAttenuation, randTxPower, randBeamDiv);
+
+                        // 3. Store data as a CSV row
+                        data.push([
+                            randDist.toFixed(2),
+                            randWavelength,
+                            randTxPower.toFixed(2),
+                            randBeamDiv.toFixed(2),
+                            randAttenuation.toFixed(2),
+                            margin.toFixed(2)
+                        ].join(','));
+                    }
+
+                    // Join all rows with a newline character
+                    generatedCSVData = data.join('\n');
+                    
+                    // Update UI to show completion
+                    genStatus.innerText = `Successfully generated ${numPoints} points.`;
+                    genDataBtn.disabled = false;
+                    downloadBtn.disabled = false;
+                    downloadBtn.classList.remove('hidden');
+
+                }, 50); 
+            });
+
+            // Logic for the "Download" button
+            downloadBtn.addEventListener('click', () => {
+                if (generatedCSVData === "") {
+                    genStatus.innerText = "No data generated yet.";
+                    return;
+                }
+
+                // Create a "blob" (a file in memory)
+                const blob = new Blob([generatedCSVData], { type: 'text/csv;charset=utf-8;' });
+                
+                // Create a temporary link element to trigger the download
+                const link = document.createElement('a');
+                if (link.download !== undefined) {
+                    const url = URL.createObjectURL(blob);
+                    link.setAttribute('href', url);
+                    link.setAttribute('download', 'fso_dataset.csv');
+                    link.style.visibility = 'hidden';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                }
+                genStatus.innerText = "fso_dataset.csv downloaded.";
+            });
+
+
+            // --- I. Initial Setup ---
+            // Set the "Clear" button to active on load
+            document.querySelector('.weather-button[data-weather="Clear"]').classList.add('active');
+            // Run the simulation once on page load to get initial values
+            updateLink();
+            // Re-run simulation if window is resized (to update distances)
+            window.addEventListener('resize', updateLink);
+        });
+    </script>
+</body>
+</html>
